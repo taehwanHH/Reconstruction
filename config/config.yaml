@@ -1,0 +1,49 @@
+# Copyright (c) Meta Platforms, Inc. and its affiliates.
+
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+# root config for MidasTouch 
+
+defaults:
+  - _self_
+  - expt: ycb # main experimental params
+  - tcn: default # tactile code network params
+  - tdn: default # tactile depth network params
+  - method: train_data
+
+
+obj_model: "035_power_drill"
+path :
+min_dist: 0.001  # 1mm
+max_samples: 5000
+max_attempts: 200000
+
+render:
+  pixmm: 0.03
+  width: 240
+  height: 320
+  cam_dist: 0.022
+  shear_mag: 5.0
+  pen:
+    min: 0.0001
+    max: 0.001
+  randomize: True
+  headless: False
+
+noise:
+  sig_r: 1  # degrees
+  sig_t: 5e-4  # m
+
+num_samples: 10000
+total_length: 0.5
+
+
+
+# (Optional) hydra settings to prevent job dir changes:
+hydra:
+  output_subdir: null
+  run:
+    dir: "."
+  job:
+    chdir: true

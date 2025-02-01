@@ -1,0 +1,126 @@
+obj_model: 035_power_drill
+path: null
+min_dist: 0.001
+max_samples: 2000
+max_attempts: 200000
+render:
+  pixmm: 0.03
+  width: 240
+  height: 320
+  cam_dist: 0.022
+  shear_mag: 5.0
+  pen:
+    min: 0.0001
+    max: 0.001
+  randomize: true
+  headless: false
+noise:
+  sig_r: 1
+  sig_t: 0.0005
+num_samples: 10000
+total_length: 0.5
+expt:
+  obj_model: 035_power_drill
+  log_id: 0
+  ablation: false
+  frame_rate: 20
+  off_screen: false
+  render: true
+  max_length: None
+  codebook_size: 50000
+  params:
+    num_particles: 50000
+    noise_r:
+      sim: 0.5
+      real: 0.5
+    noise_t:
+      sim: 0.0002
+      real: 0.0002
+    noise_ratio: 1.0
+tcn:
+  model:
+    tcn_weights: tcn_weights.pth.tar
+    model: MinkFPN
+    num_points: 4096
+    batch_size: 100
+    mink_quantization_size: 0.001
+    planes: 32,64,64
+    layers: 1,1,1
+    num_top_down: 1
+    conv0_kernel_size: 5
+    feature_size: 256
+    output_dim: 256
+  train:
+    num_workers: 8
+    batch_size: 8
+    val_batch_size: 64
+    batch_size_limit: 64
+    batch_expansion_rate: 1.4
+    batch_expansion_th: 0.7
+    max_batches: 1000
+    lr: 1.0e-07
+    image_lr: 0.0001
+    epochs: 100
+    scheduler_milestones: 30, 50, 70
+    scheduler: MultiStepLR
+    min_lr: 1.0e-06
+    optimizer: Adam
+    aug_mode: 1
+    weight_decay: 0.0001
+    loss: BatchHardTripletMarginLoss
+    weights: 1.0, 0.0, 0.0
+    normalize_embeddings: true
+    margin: 0.2
+    pos_margin: 0.2
+    neg_margin: 0.65
+    train_file: train_sets_tacto_40.pickle
+    val_file: val_sets_tacto_40.pickle
+    dataset_folder: /mnt/sda/suddhu/minkloc/minkloc_data
+    val_folder: /mnt/sda/suddhu/minkloc/minkloc_val
+    eval_folder: /mnt/sda/suddhu/fcrn/fcrn_eval
+tdn:
+  tdn_weights: tdn_weights.pth.tar
+  render:
+    pixmm: 0.03
+    width: 240
+    height: 320
+    cam_dist: 0.022
+    shear_mag: 5.0
+    pen:
+      min: 0.0005
+      max: 0.002
+  fcrn:
+    real:
+      blend_sz: 10
+      border: 10
+      ratio: 0.9
+      clip: 5
+      batch_size: 1
+    sim:
+      blend_sz: 0
+      border: 1
+      ratio: 0.2
+      clip: 5
+      batch_size: 1
+method:
+  obj_class: ycb_train
+  obj_model: 035_power_drill
+  spacing: 0.0005
+  sample_factor: 1000000
+  sampling: random
+  save_path: ./train_data
+  noise:
+    sig_r: 1
+    sig_t: 0.0005
+  num_samples: 10000
+  total_length: 0.5
+  render:
+    pixmm: 0.03
+    width: 240
+    height: 320
+    cam_dist: 0.022
+    shear_mag: 5.0
+    pen:
+      min: 0.0001
+      max: 0.001
+    randomize: true
