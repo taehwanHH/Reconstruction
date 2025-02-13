@@ -13,11 +13,13 @@ defaults:
   - method: train_data
 
 
-obj_model: "035_power_drill"
+# obj_model: "035_power_drill"
+obj_model: "011_banana"
+#obj_model: "048_hammer"
 path :
-min_dist: 0.001  # 1mm
-max_samples: 5000
-max_attempts: 200000
+max_samples: 4000
+candidate_multiplier: 10  # 후보점은 max_samples의 몇 배로 생성할지 결정
+batch_size: 500
 
 render:
   pixmm: 0.03

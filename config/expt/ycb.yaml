@@ -5,7 +5,8 @@
 
 # Config for MidasTouch experimental setup 
 
-obj_model : 035_power_drill # Object model
+#obj_model : 035_power_drill # Object model
+obj_model : 011_banana
 log_id : 0 # Log ID
 ablation : False
 frame_rate : 20

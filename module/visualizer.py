@@ -4,6 +4,8 @@ from matplotlib import cm
 from pyvistaqt import BackgroundPlotter
 import torch
 import copy
+import matplotlib.pyplot as plt
+
 from os import path as osp
 from midastouch.modules.misc import DIRS
 from midastouch.modules.particle_filter import Particles
@@ -19,7 +21,7 @@ class Viz:
         self, off_screen: bool = False, zoom: float = 1.0, window_size: int = 0.5
     ):
 
-        pv.global_theme.multi_rendering_splitting_position = 0.7
+        pv.global_theme.multi_rendering_splitting_position = 0.5
         """
             subplot(0, 0) main viz
             subplot(0, 1): tactile image viz
@@ -35,7 +37,8 @@ class Viz:
         self.plotter = BackgroundPlotter(
             title="MidasTouch",
             lighting="three lights",
-            window_size=(int(w * window_size), int(h * window_size)),
+            # window_size=(int(w * window_size), int(h * window_size)),
+            window_size=(900, 500),
             off_screen=off_screen,
             shape=shape,
             row_weights=row_weights,
@@ -49,7 +52,7 @@ class Viz:
         self.zoom = zoom
 
         self.viz_queue = queue.Queue(1)
-        self.plotter.add_callback(self.update_viz, interval=30)
+        self.plotter.add_callback(self.update_viz, interval=500)
         self.pause = False
         self.font_size = int(30 * window_size)
         self.off_screen = off_screen
@@ -95,10 +98,7 @@ class Viz:
             mesh_path.replace("nontextured", "nontextured_decimated")
         )  # decimated pyvista object
         self.frame_rate = frame_rate
-        # self.moving_sensor = pv.read(
-        #     osp.join(DIRS["obj_models"], "digit", "digit.STL")
-        # )  # plotted gt sensor
-        # self.init_sensor = copy.deepcopy(self.moving_sensor)  # sensor @ origin
+
 
         # Filter window
         self.plotter.subplot(0, 0)
@@ -116,52 +116,52 @@ class Viz:
         if not self.off_screen:
             pos, offset = self.plotter.window_size[1] - 40, 10
             widget_size = 25
-            self.plotter.add_checkbox_button_widget(
-                self.toggle_vis,
-                value=True,
-                color_off="white",
-                color_on="black",
-                position=(10, pos),
-                size=widget_size,
-            )
-            self.plotter.add_text(
-                "Toggle object",
-                position=(15 + widget_size, pos),
-                color="black",
-                font="times",
-                font_size=self.font_size,
-            )
-            self.reset_widget = self.plotter.add_checkbox_button_widget(
-                self.reset_vis,
-                value=True,
-                color_off="white",
-                color_on="white",
-                background_color="gray",
-                position=(10, pos - (widget_size + offset)),
-                size=widget_size,
-            )
-            self.plotter.add_text(
-                "Reset camera",
-                position=(15 + widget_size, pos - (widget_size + offset)),
-                color="black",
-                font="times",
-                font_size=self.font_size,
-            )
-            self.plotter.add_checkbox_button_widget(
-                self.pause_vis,
-                value=False,
-                color_off="white",
-                color_on="black",
-                position=(10, pos - 2 * (widget_size + offset)),
-                size=widget_size,
-            )
-            self.plotter.add_text(
-                "Pause",
-                position=(15 + widget_size, pos - 2 * (widget_size + offset)),
-                color="black",
-                font="times",
-                font_size=self.font_size,
-            )
+            # self.plotter.add_checkbox_button_widget(
+            #     self.toggle_vis,
+            #     value=True,
+            #     color_off="white",
+            #     color_on="black",
+            #     position=(10, pos),
+            #     size=widget_size,
+            # )
+            # self.plotter.add_text(
+            #     "Toggle object",
+            #     position=(15 + widget_size, pos),
+            #     color="black",
+            #     font="times",
+            #     font_size=self.font_size,
+            # )
+            # self.reset_widget = self.plotter.add_checkbox_button_widget(
+            #     self.reset_vis,
+            #     value=True,
+            #     color_off="white",
+            #     color_on="white",
+            #     background_color="gray",
+            #     position=(10, pos - (widget_size + offset)),
+            #     size=widget_size,
+            # )
+            # self.plotter.add_text(
+            #     "Reset camera",
+            #     position=(15 + widget_size, pos - (widget_size + offset)),
+            #     color="black",
+            #     font="times",
+            #     font_size=self.font_size,
+            # )
+            # self.plotter.add_checkbox_button_widget(
+            #     self.pause_vis,
+            #     value=False,
+            #     color_off="white",
+            #     color_on="black",
+            #     position=(10, pos - 2 * (widget_size + offset)),
+            #     size=widget_size,
+            # )
+            # self.plotter.add_text(
+            #     "Pause",
+            #     position=(15 + widget_size, pos - 2 * (widget_size + offset)),
+            #     color="black",
+            #     font="times",
+            #     font_size=self.font_size,
+            # )
         self.set_camera()
 
         self.max_clusters = 5
@@ -200,7 +200,7 @@ class Viz:
         )
 
         self.plotter.add_text(
-            f"Filter: {obj_model}",
+            "Contact point",
             position="bottom",
             color="black",
             shadow=True,
@@ -250,6 +250,7 @@ class Viz:
                 heightmaps,
                 tactile_images,
                 frame,
+                image_savepath
             ) = self.viz_queue.get()
             self.viz_contact(sampled_points,frame)
             self.viz_tactile_image(tactile_images,heightmaps,contact_masks)
@@ -264,6 +265,9 @@ class Viz:
                 name="frame text",
                 render=True,
             )
+            if image_savepath:
+                self.images["im"].append(self.plotter.screenshot())
+                self.images["path"].append(image_savepath)
             self.viz_queue.task_done()
 
     def update(
@@ -273,6 +277,7 @@ class Viz:
             heightmaps: np.ndarray = None,
             tactile_images: np.ndarray = None,
             frame: int = None,
+            image_path: str = None
     ) -> None:
         """
         메쉬와 샘플링된 접촉점, 센서 포즈, 접촉 마스크, 높이 맵, 촉각 이미지를 업데이트.
@@ -295,6 +300,7 @@ class Viz:
                 heightmaps,
                 tactile_images,
                 frame,
+                image_path
             ),
             block=False,
         )
@@ -372,6 +378,7 @@ class Viz:
         #     name="Heightmap text",
         # )
         self.plotter.subplot(0, 1)
+
         heightmap, mask = heightmap.cpu().numpy(), mask.cpu().numpy()
         image_tex = pv.numpy_to_texture(image)
 
@@ -388,6 +395,7 @@ class Viz:
             name="image",
             render=False,
         )
+
         self.plotter.add_mesh(
             self.heightmap_plane,
             texture=heightmap_tex,
