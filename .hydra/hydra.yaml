@@ -1,6 +1,6 @@
 hydra:
   run:
-    dir: .
+    dir: ./
   sweep:
     dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
     subdir: ${hydra.job.num}
@@ -113,12 +113,12 @@ hydra:
     - hydra.mode=RUN
     task: []
   job:
-    name: reconstruction
-    chdir: true
+    name: stiffness
+    chdir: null
     override_dirname: ''
     id: ???
     num: ???
-    config_name: config
+    config_name: allegro_hand
     env_set: {}
     env_copy: []
     config:
@@ -142,10 +142,6 @@ hydra:
       provider: schema
     output_dir: /home/wireless/Tactile/Research
     choices:
-      method: train_data
-      tdn: default
-      tcn: default
-      expt: ycb
       hydra/env: default
       hydra/callbacks: null
       hydra/job_logging: default

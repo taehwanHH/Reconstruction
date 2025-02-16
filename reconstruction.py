@@ -13,22 +13,6 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib
 import trimesh
-matplotlib.use('TkAgg')  # 인터랙티브 백엔드 명시 (환경에 따라 변경)
-
-from mpl_toolkits.mplot3d import Axes3D  # 이 줄은 3D 프로젝션을 활성화함
-
-# sensor STL 모델을 한 번만 로드 (경로는 환경에 맞게 수정)
-sensor_model_path = osp.join("STL","digit.STL")  # 예: 현재 디렉토리의 digit.STL
-if osp.exists(sensor_model_path):
-    sensor_mesh = trimesh.load(sensor_model_path)
-    # sensor_mesh.vertices: (N,3) NumPy array
-    sensor_vertices = torch.tensor(sensor_mesh.vertices, device="cuda", dtype=torch.float)
-    print(f"[INFO] digit.STL 파일을 성공적으로 로드하였습니다. (정점 수: {sensor_vertices.shape[0]})")
-
-else:
-    sensor_vertices = None
-    print("[WARN] Sensor STL 파일을 찾을 수 없습니다.")
-
 
 def merge_points_with_sensor_direction(points, sensor_dirs, merge_voxel_size):
     """
@@ -82,32 +66,6 @@ def reconstruction(cfg: DictConfig):
         sensor_poses = np.load(sensor_poses_path)
     else:
         sensor_poses = None
-
-    # cam_poses.npy 파일이 있다면, 이를 로드합니다.
-    if osp.exists(cam_poses_path):
-        cam_poses = np.load(cam_poses_path)  # shape: (num_frames, 4, 4)
-    else:
-        cam_poses = None
-        print("[WARN] gel_poses.npy 파일을 찾을 수 없습니다. cam_poses를 사용할 수도 있습니다.")
-
-    # 인터랙티브 모드 활성화 (기본적으로 백엔드가 인터랙티브한 경우)
-    plt.ion()
-
-    # figure와 3D axis 생성
-    fig = plt.figure(figsize=(8, 6))
-    # ax = fig.add_subplot(121, projection='3d')
-    # ax.set_xlim(-0.001, 0.001)
-    # ax.set_ylim(-0.001, 0.001)
-    # ax.set_zlim(-0.001, 0.001)
-    #
-    # ax2 = fig.add_subplot(122, projection='3d')
-    # # ax.set_xlim(-0.001, 0.001)
-    # # ax.set_ylim(-0.001, 0.001)
-    # # ax.set_zlim(-0.001, 0.001)
-    ax3= fig.add_subplot(111, projection='3d')
-    # ax.set_xlim(-0.001, 0.001)
-    # ax.set_ylim(-0.001, 0.001)
-    # ax.set_zlim(-0.001, 0.001)
 
     print(f"[INFO] {obj_model} reconstruction 시작...")
     time.sleep(1)
@@ -171,9 +129,6 @@ def reconstruction(cfg: DictConfig):
                             [np.sin(theta), np.cos(theta), 0],
                             [0, 0, 1]], device=local_points_centered.device, dtype=local_points_centered.dtype)
 
-        # # local_points_centered에 R_z를 적용하여 회전
-        # local_points_centered_rot = (R_z @ local_points_centered.T).T
-
         # --- 보정 종료 ---
 
         # --- Global 변환 ---
@@ -198,82 +153,7 @@ def reconstruction(cfg: DictConfig):
         else:
             contact_pt = torch.tensor(sampled_points[i], device=local_points.device, dtype=local_points.dtype)
             global_points = local_points_centered + contact_pt
-
         # --- Global 변환 종료 ---
-        # sensor 모델 변환: sensor_vertices를 현재 프레임의 composite_rot와 contact_pt를 이용하여 변환
-        # cam_poses가 있다면 cam_poses를 사용하여 센서 모델을 변환합니다.
-        # 만약 cam_poses와 sensor_vertices가 모두 존재하면 cam_poses를 사용하여 센서 모델 변환
-        # if cam_poses is not None and sensor_vertices is not None:
-        #     # cam_poses는 [x,y,z,qx,qy,qz,qw] 형태로 저장되어 있음.
-        #     cam_pose_vec = cam_poses[i]  # [x,y,z,qx,qy,qz,qw]
-        #     cam_translation = torch.tensor(cam_pose_vec[:3], device="cuda", dtype=local_points.dtype)
-        #     cam_quat = cam_pose_vec[3:]  # [qx, qy, qz, qw]
-        #     # 쿼터니언을 회전행렬로 변환 (scipy 사용)
-        #     from scipy.spatial.transform import Rotation as R
-        #     R_cam_np = R.from_quat(cam_quat).as_matrix()  # (3,3); quaternion order: [qx,qy,qz,qw]
-        #     R_cam = torch.tensor(R_cam_np, device="cuda", dtype=local_points.dtype)
-        #     # flip 행렬 없이 저장된 데이터 그대로 사용 (즉, composite_rot_cam = R_cam)
-        #     composite_rot_cam = R_cam
-        #     # 센서 모델 변환: sensor_vertices에 composite_rot_cam를 적용한 후, cam_translation을 더함.
-        #     transformed_sensor = (composite_rot_cam @ sensor_vertices.T).T + cam_translation
-        #     sensor_pts = transformed_sensor.cpu().numpy()
-        #     ax3.scatter(sensor_pts[:, 0], sensor_pts[:, 1], sensor_pts[:, 2],
-        #                 s=5, c='green', marker='^', label="Sensor Model (Cam Pose)")
-        # elif sensor_vertices is not None:
-        #     # cam_poses가 없으면, fallback으로 sensor_poses를 사용 (flip 없이)
-        #     sensor_pose_np = sensor_poses[i]
-        #     sensor_pose = torch.tensor(sensor_pose_np, device="cuda", dtype=local_points.dtype)
-        #     R_sensor = sensor_pose[:3, :3]
-        #     composite_rot_sensor = R_sensor  # flip 없이 그대로 사용
-        #     transformed_sensor = (composite_rot_sensor @ sensor_vertices.T).T + contact_pt
-        #     sensor_pts = transformed_sensor.cpu().numpy()
-        #     ax3.scatter(sensor_pts[:, 0], sensor_pts[:, 1], sensor_pts[:, 2],
-        #                 s=5, c='green', marker='^', label="Sensor Model (Sensor Pose)")
-
-        # # --- 센서 모델 시각화 종료 ---
-        # # --- 디버깅: 매 프레임 local_points_centered의 3D 산점도 표시 ---
-        # ax.cla()  # 현재 축 초기화
-        # ax2.cla()
-        #
-        # pts = local_points_centered.cpu().numpy()
-        # pts2 = local_points.cpu().numpy()
-        # ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], s=1, c='blue', label="Local Points")
-        # ax2.scatter(pts2[:, 0], pts2[:, 1], pts2[:, 2], s=1, c='blue', label="Local Points")
-        # # (0,0,0) 위치 강조: 빨간 별로 표시하고, 크기와 레이블 추가
-        # ax.scatter(0, 0, 0, s=50, c='red', marker='*', label="Origin (0,0,0)")
-        # center_point = center_point.cpu().numpy()
-        #
-        # ax2.scatter(center_point[0], center_point[1],center_point[2], c='red', marker='*', label="Center")
-        #
-        # ax.set_title(f"Frame {i}: Local Point Cloud (3D)")
-        # ax.set_xlabel("X (m)")
-        # ax.set_ylabel("Y (m)")
-        # ax.set_zlabel("Z (m)")
-        # ax2.set_xlabel("X (m)")
-        # ax2.set_ylabel("Y (m)")
-        # ax2.set_zlabel("Z (m)")
-        #
-        # ax.legend()
-        # ax2.legend()
-        # ax.set_xlim(-0.02,0.02)
-        # ax.set_ylim(-0.02, 0.02)
-        # ax.view_init(elev=90, azim=-90)  # 원하는 시점으로 조정
-        # ax2.view_init(elev=30, azim=0)  # 원하는 시점으로 조정
-        # # plt.draw()
-        # # plt.pause(0.1)
-        #
-        # ax3.view_init(elev=30, azim=0)  # 원하는 시점으로 조정
-        #
-        # pts3 = global_points.cpu().numpy()
-        # ax3.scatter(pts3[:, 0], pts3[:, 1], pts3[:, 2], s=20, c='blue', label="Local Points")
-        #
-        # ax3.set_title(f"Frame {i}: Global Point Cloud (3D)")
-        # ax3.set_xlabel("X (m)")
-        # ax3.set_ylabel("Y (m)")
-        # ax3.set_zlabel("Z (m)")
-        # # ax3.legend()
-        # plt.draw()
-        # plt.pause(0.0001)
         all_points_list.append(global_points)
 
 
