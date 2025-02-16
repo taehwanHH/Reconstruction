@@ -1,5 +1,0 @@
-[2025-02-02 17:38:06,793][root][ERROR] - STLReader error reading file: /home/wireless/Tactile/Research/data/sim/035_power_drill/full_coverage/reconstructed_mesh_poisson.stl Premature EOF while reading header.
-[2025-02-02 17:38:06,793][root][ERROR] - Algorithm vtkSTLReader(0x14a4aa30) returned failure for request: vtkInformation (0x15660e40)
-[2025-02-09 20:17:35,734][root][ERROR] - GLEW could not be initialized: Unknown error
-[2025-02-09 20:25:10,223][root][ERROR] - GLEW could not be initialized: Unknown error
-[2025-02-09 20:27:22,672][root][ERROR] - GLEW could not be initialized: Unknown error
