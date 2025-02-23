@@ -25,6 +25,10 @@ class Stiffness:
     def k_num(self):
         return self.k_values.shape[0]
 
+    def k_normalize(self,k):
+        return (k - self.k_values.min()) / (self.k_values.max() - self.k_values.min() + 1e-8)
+
+
     def get_local_stiffness(self,positions, bounds):
         min_bound, max_bound = bounds
         min_bound = np.array(min_bound)
@@ -76,7 +80,7 @@ class TactileMap(Stiffness):
         self.obj = obj
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.cfg = config
-        self.num_samples = config.num_samples
+        self.num_samples = config.sensing.num_samples
         self._init_paths()
         self.model = TSN_COPY(num_k = self.k_num)
 
