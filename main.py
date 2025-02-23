@@ -14,7 +14,10 @@ from midastouch.render.digit_renderer import digit_renderer
 from midastouch.modules.misc import remove_and_mkdir, save_heightmaps, save_contactmasks, save_images
 from midastouch.modules.pose import pose_from_vertex_normal
 
+from module.TactileUtil import Stiffness
+
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 
 def sample_point_in_triangle(face_idx, mesh):
@@ -88,7 +91,8 @@ def farthest_point_sampling(points, candidate_faces, num_samples, density_radius
     normalized_density = (densities - dens_min) / (dens_max - dens_min + 1e-12)
 
     # 첫 번째 점은 랜덤 선택
-    first_idx = random.randint(0, N - 1)
+    # first_idx = random.randint(0, N - 1)
+    first_idx = 0
     sampled_indices.append(first_idx)
 
     last_point = points[first_idx]
@@ -116,6 +120,64 @@ def compute_face_normals(mesh, face_idxs):
     norms = mesh.face_normals[face_idxs]
     norms /= (np.linalg.norm(norms, axis=1, keepdims=True) + 1e-12)
     return norms
+
+
+def get_local_stiffness(positions, bounds, k_values):
+    min_bound, max_bound = bounds
+    min_bound = np.array(min_bound)
+    max_bound = np.array(max_bound)
+
+    # 각 축의 구간 길이 계산
+    z_interval = (max_bound[2] - min_bound[2]) / 2.0
+    x_interval = (max_bound[0] - min_bound[0]) / 2.0
+    y_interval = (max_bound[1] - min_bound[1]) / 2.0
+
+    # 각 contact point의 인덱스 계산 (배치 연산)
+    z_idx = np.floor((positions[:, 2] - min_bound[2]) / z_interval).astype(np.int32)
+    z_idx = np.clip(z_idx, 0, 1)
+
+    x_idx = np.floor((positions[:, 0] - min_bound[0]) / x_interval).astype(np.int32)
+    x_idx = np.clip(x_idx, 0, 1)
+
+    y_idx = np.floor((positions[:, 1] - min_bound[1]) / y_interval).astype(np.int32)
+    y_idx = np.clip(y_idx, 0, 1)
+
+    xy_idx = y_idx * 2 + x_idx
+    region_idx = (z_idx * 4 + xy_idx)%8  # 0 ~ 15
+
+    stiffness_candidates = np.array(k_values)
+    return stiffness_candidates[region_idx]
+
+
+def color_mesh_by_stiffness(mesh, sample_positions, sample_stiffness, colormap_name='viridis'):
+    """
+    mesh: trimesh 객체
+    sample_positions: (N, 3) numpy array, 각 contact point의 위치
+    sample_stiffness: (N,) numpy array, 각 contact point에 해당하는 stiffness 값
+    colormap_name: 사용할 matplotlib colormap 이름 (예: 'viridis')
+
+    메쉬의 각 버텍스에 대해, 가장 가까운 contact point의 stiffness 값을 할당한 후,
+    이를 colormap을 통해 RGB로 변환하여 버텍스 컬러로 지정.
+    """
+    # KD-tree를 구축하여 각 버텍스에 대해 가장 가까운 contact point 찾기
+    tree = cKDTree(sample_positions)
+    vertex_positions = mesh.vertices  # (M, 3)
+    distances, indices = tree.query(vertex_positions)
+
+    # 각 버텍스에 대해 stiffness 값 할당
+    vertex_stiffness = sample_stiffness[indices]
+
+    # 정규화: 0 ~ 1 범위로
+    norm_stiffness = (vertex_stiffness - vertex_stiffness.min()) / (
+                vertex_stiffness.max() - vertex_stiffness.min() + 1e-8)
+
+    # colormap 적용 (RGBA -> RGB 추출)
+    cmap = plt.get_cmap(colormap_name)
+    vertex_colors = cmap(norm_stiffness)[:, :3]  # (M, 3), 값은 0~1
+
+    # trimesh에서는 vertex_colors가 0~255 uint8 형식이어야 함
+    mesh.visual.vertex_colors = (vertex_colors * 255).astype(np.uint8)
+    return mesh
 
 
 @hydra.main(version_base="1.1", config_path="config", config_name="config")
@@ -149,6 +211,8 @@ def main(cfg: DictConfig):
         raise FileNotFoundError(f"mesh not found: {mesh_path}")
 
     mesh = trimesh.load(mesh_path)
+    min_bound, max_bound = mesh.bounds
+    bounds = (min_bound, max_bound)
     print(f"[INFO] Loaded {obj_model}")
     print(f" #faces={len(mesh.faces)}, #verts={len(mesh.vertices)}")
     print(f" extents={mesh.extents}, bounds={mesh.bounds}")
@@ -198,14 +262,23 @@ def main(cfg: DictConfig):
     all_hm, all_cm, all_img, cam_poses = [], [], [],[]
     start_idx = 0
 
+    k_config = cfg.render.k
+    k_max = k_config.max
+    k_min = k_config.min
+    k_interval = k_config.interval
+
+    k_values = list(range(k_min, k_max + 1, k_interval))
+
     tqdm.write(f"[INFO] Rendering {total_poses} poses with batch_size={BATCH_SIZE}")
     time.sleep(1)
     with tqdm(total=total_poses, desc="Rendering Progress", unit="poses") as pbar:
         while start_idx < total_poses:
             end_idx = min(start_idx + BATCH_SIZE, total_poses)
             batch_poses = poses[start_idx:end_idx]
+            positions = batch_poses[:,:3, 3]
+            stiffness_values = get_local_stiffness(positions,bounds,k_values)
 
-            hm, cm, imgs,cam_p , _, _ = renderer.render_sensor_trajectory(p=batch_poses, mNoise=cfg.noise)
+            hm, cm, imgs,cam_p , _, _ = renderer.render_sensor_trajectory(p=batch_poses,k_values=stiffness_values, mNoise=cfg.noise)
             all_hm.extend(hm)
             all_cm.extend(cm)
             all_img.extend(imgs)
@@ -223,11 +296,59 @@ def main(cfg: DictConfig):
     # 최종 결과 저장
     np.save(os.path.join(data_path, "sampled_points.npy"), points)
     np.save(os.path.join(data_path, "sensor_poses.npy"), poses)
-    np.save(os.path.join(data_path, "cam_poses.npy"), cam_poses)
+    # np.save(os.path.join(data_path, "cam_poses.npy"), cam_poses)
+
 
     print(f"[DONE] Coverage scan done, total poses={total_poses}")
+
+
     print(f"Results in {data_path}")
 
+    # print(f"[INFO] Stiffness map creating...")
+    # positions = poses[:, :3, 3]
+    # org_stiffness = get_local_stiffness(positions, bounds, k_values)
+    # # stiffness 값을 [0, 1] 범위로 정규화 (heatmap 시각화를 위해)
+    # # norm_res = (org_stiffness - org_stiffness.min()) / (org_stiffness.max() - org_stiffness.min() + 1e-8)
+    #
+    # colored_mesh1 = color_mesh_by_stiffness(mesh, positions, org_stiffness, colormap_name='viridis')
+    # colored_mesh1.show()
+    # print(f"[DONE] Stiffness map saved")
 
+    # transform = transforms.Compose([
+    #     transforms.Resize((224, 224)),
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.5], std=[0.5])
+    # ])
+    #
+    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # model = create_resnet_for_classification(num_input_channels=1, num_classes=len(k_values))
+    # model.to(device)
+    # model.load_state_dict(
+    #     torch.load("model_weights/resnet_TSN.pth", map_location=device, weights_only=True))
+    # model.eval()
+    #
+    # k_l=[]
+    # for i in range(4000):
+    #     hm_path = osp.join(heightmap_path,f"{i}.jpg")
+    #     hm = Image.open(hm_path)
+    #     hm_img = transform(hm.convert('L'))
+    #     with torch.no_grad():
+    #         hm_in = hm_img.unsqueeze(0).to(device)
+    #         output = model(hm_in)
+    #         _, predicted_k = torch.max(output, 1)
+    #         k_l.append(predicted_k.item())
+    # k_values = np.array(k_values)
+    # k_list = k_values[k_l]
+    # positions = poses[:, :3, 3]
+    # norm_res = (k_list - k_list.min()) / (k_list.max() - k_list.min() + 1e-8)
+    #
+    # colored_mesh2 = color_mesh_by_stiffness(mesh, positions, norm_res,
+    #                                        colormap_name='viridis')
+    # # colored_mesh2.show()  # 내장 뷰어로 확인하거나
+    # # colored_mesh2.apply_translation([0.2, 0, 0])
+    # #
+    # # # 두 메쉬를 하나의 씬에 추가
+    # # scene = trimesh.Scene([colored_mesh1, colored_mesh2])
+    # # scene.show()
 if __name__ == "__main__":
     main()

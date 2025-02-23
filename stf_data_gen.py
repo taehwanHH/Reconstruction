@@ -41,10 +41,8 @@ def main(cfg: DictConfig):
     # 2) 후보점 생성 및 FPS 적용
     candidate_count = max_samples * candidate_multiplier
     print(f"[INFO] Generating {candidate_count} candidate points for sampling...")
-    # area_exponent를 반영하여 후보점 생성
     candidates, candidate_faces = generate_candidate_points(mesh, candidate_count, area_exponent=area_exponent)
 
-    # density_radius 기본값: bounding box diagonal / density_radius_factor
     diag = np.linalg.norm(mesh.bounds[1] - mesh.bounds[0])
     density_radius = diag / cfg.get("density_radius_factor", 50.0)
 
@@ -61,9 +59,10 @@ def main(cfg: DictConfig):
     poses = pose_from_vertex_normal(points, normals, shear_rad, delta)
 
     # 4) 출력 폴더 생성
-    data_path = os.path.join("data", "sim", obj_model, "stiffness")
+    # cfg.split (또는 cfg.mode) 파라미터에 따라 train/test 디렉토리 분리
+    dataset_type = cfg.get("mode", "train")
+    data_path = os.path.join("data", "sim", obj_model, "stiffness", dataset_type)
     remove_and_mkdir(data_path)
-
 
     # 5) 렌더러 초기화 (randomize 옵션이 False이면 한 번만 생성)
     renderer = digit_renderer(
@@ -77,12 +76,11 @@ def main(cfg: DictConfig):
     total_poses = len(poses)
 
     k_config = cfg.render.k
-
     k_max = k_config.max
     k_min = k_config.min
-    k_interval = 500
+    k_interval = k_config.interval
 
-    k_values = list(range(k_min,k_max,k_interval))
+    k_values = list(range(k_min, k_max + 1, k_interval))
 
     for k in k_values:
         tqdm.write(f"------------stiffness: {k}--------------")
@@ -108,12 +106,11 @@ def main(cfg: DictConfig):
                 end_idx = min(start_idx + BATCH_SIZE, total_poses)
                 batch_poses = poses[start_idx:end_idx]
 
-                hm, cm, imgs,cam_p , _, _ = renderer.render_sensor_trajectory(p=batch_poses, mNoise=cfg.noise)
+                hm, cm, imgs, cam_p, _, _ = renderer.render_sensor_trajectory(p=batch_poses, mNoise=cfg.noise)
                 all_hm.extend(hm)
                 all_cm.extend(cm)
                 all_img.extend(imgs)
                 cam_poses.extend(cam_p)
-
 
                 pbar.update(len(batch_poses))
                 start_idx = end_idx
@@ -137,7 +134,7 @@ def main(cfg: DictConfig):
         writer = csv.writer(csvfile)
         writer.writerow(["filename", "stiffness"])  # 헤더 작성
         for s in k_values:
-            base_dir = os.path.join(data_path, f"s_{s}")
+            base_dir = os.path.join(data_path, f"stiffness_{s}")
             img_dir = os.path.join(base_dir, "gt_heightmaps")
             if not os.path.exists(img_dir):
                 continue
