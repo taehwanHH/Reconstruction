@@ -22,8 +22,10 @@ obj_model: "011_banana"
 path :
 
 sensing:
-  max_samples: 3000
-  num_samples: 1000
+  samples: 3000
+  min_samples: 100
+  num_samples: 3000
+  smp_interval: 100
   candidate_multiplier: 10  # 후보점은 max_samples의 몇 배로 생성할지 결정
   density_boost: 1.0
   area_exponent: 0.5
@@ -53,6 +55,24 @@ noise:
 
 total_length: 0.5
 
+comm:
+  iscomplex: False
+  snr: 10
+  channel_type: "awgn"
+
+model:
+  gae:
+    epochs: 200
+    in_dim: 3
+    hid_dim: 64
+    latent_dim: 32
+    lr: 0.01
+
+
+sim2:
+  max_iterations: 100
+  num_next_points : 20
+
 
 # (Optional) hydra settings to prevent job dir changes:
 hydra:
@@ -60,4 +80,4 @@ hydra:
   run:
     dir: "."
   job:
-    chdir: true
+    chdir: false

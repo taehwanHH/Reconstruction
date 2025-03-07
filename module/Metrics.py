@@ -1,18 +1,14 @@
-import trimesh
-import numpy as np
-from scipy.spatial import cKDTree
+
 import hydra
 from omegaconf import DictConfig
 import os.path as osp
-import os
 import trimesh
 import numpy as np
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from PIL import Image
 import io
 import trimesh.transformations as tf
-from tqdm import tqdm
-import time
+
 
 
 
@@ -62,7 +58,7 @@ def evaluate_rendered_images(mesh_gt, mesh_recon,  resolution=(256,256)):
 
     for key, value in metrics.items():
         # key를 대문자로 변환, 소수점 4자리까지 출력
-        print(f"\033[1;31m{key.upper():<4}: {value:.4f}\033[0m")
+        print(f"\033[1;36m{key.upper():<4}: {value:.4f}\033[0m")
     return metrics
 
 

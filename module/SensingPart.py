@@ -2,54 +2,53 @@
 import os
 from os import path as osp
 import math
-import random
 import numpy as np
 import trimesh
 from scipy.spatial import cKDTree
 
-import time
-import hydra
-from omegaconf import DictConfig
 from midastouch.render.digit_renderer import digit_renderer
 from midastouch.modules.misc import remove_and_mkdir, save_heightmaps, save_contactmasks, save_images
 from midastouch.modules.pose import pose_from_vertex_normal
+from midastouch.data_gen.utils import random_geodesic_poses, random_manual_poses
 
 from module.TactileUtil import Stiffness
 from module.TSN import TSN_COPY, TRANSFORM
 from PIL import Image
 
 import torch
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 from functools import cached_property
 
 
 class Sensing(Stiffness):
-    def __init__(self, obj, config):
+    def __init__(self, config,mkdir=None):
         super().__init__(config)
-        self.obj = obj
+        self.obj = config.obj_model
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.cfg = config
         self.sensing_cfg = config.sensing
         self.render_cfg = config.render
-        self.max_samples = config.sensing.max_samples
-        self._init_paths()
+        self.samples = config.sensing.samples
+        self._init_paths(mkdir)
         self.model = TSN_COPY(num_k = self.k_num)
         self.all_hm, self.all_cm, self.all_img = [], [], []
 
 
 
-    def _init_paths(self):
+    def _init_paths(self, mkdir=None):
         base = osp.join("data", "sim", self.obj, "full_coverage")
         self.base = base
-        remove_and_mkdir(base)
+
         self.image_dir = osp.join(base, "tactile_images")
         self.heightmap_dir = osp.join(base, "gt_heightmaps")
         self.mask_dir = osp.join(base, "gt_contactmasks")
-        os.makedirs(self.image_dir, exist_ok=True)
-        os.makedirs(self.heightmap_dir, exist_ok=True)
-        os.makedirs(self.mask_dir, exist_ok=True)
+        if mkdir is None:
+            remove_and_mkdir(base)
+            os.makedirs(self.image_dir, exist_ok=True)
+            os.makedirs(self.heightmap_dir, exist_ok=True)
+            os.makedirs(self.mask_dir, exist_ok=True)
         self.mesh_path = osp.join("obj_models", self.obj, "nontextured.stl")
+        self.points_path = osp.join(self.base, "sampled_points.npy")
+        self.poses_path = osp.join(self.base, "sensor_poses.npy")
 
     @cached_property
     def mesh(self):
@@ -68,7 +67,7 @@ class Sensing(Stiffness):
 
     @cached_property
     def num_candidates(self):
-        return self.sensing_cfg.max_samples * self.sensing_cfg.candidate_multiplier
+        return self.sensing_cfg.samples * self.sensing_cfg.candidate_multiplier
 
     def candidate_points(self):
         # 면적 가중치 계산: 각 면적에 area_exponent를 적용
@@ -123,7 +122,7 @@ class Sensing(Stiffness):
         dists = np.linalg.norm(points - last_point, axis=1)
         distances = np.minimum(distances, dists)
 
-        for i in range(1, self.max_samples):
+        for i in range(1, self.samples):
             # 지수 함수 기반 보정: 밀도가 낮은 영역에 대해 더 강하게 보정.
             effective_distance = distances * np.exp(density_boost * (1 - normalized_density))
             next_idx = np.argmax(effective_distance)
@@ -136,12 +135,21 @@ class Sensing(Stiffness):
         sampled_faces = candidate_faces[sampled_indices]
         return sampled_points, sampled_faces
 
+    def get_random_trajectory(self):
+        return random_geodesic_poses(self.mesh, self.render_cfg.shear_mag,N=self.sensing_cfg.samples)
+
+    def get_manual_trajectory(self,poses=None):
+        points = None
+        if poses is not None:
+            points = poses[:,:3,3]
+        return random_manual_poses(self.mesh_path, self.render_cfg.shear_mag, points,lc=0.001)
+
     def get_points_poses(self):
-        print(f"[INFO] Generating {self.num_candidates} candidate points for sampling...")
+        print(f" [INFO] Generating {self.num_candidates} candidate points for sampling...")
         candidates, candidate_faces = self.candidate_points()
-        print(f"[INFO] Applying Farthest Point Sampling (with density boost) to select {self.max_samples} points...")
+        print(f" [INFO] Applying Farthest Point Sampling (with density boost) to select {self.samples} points...")
         points, faces = self.farthest_point_sampling(candidates, candidate_faces)
-        print(f" -> Final selected points: {len(points)}")
+        print(f"  -> Final selected points: {len(points)}")
 
         normals = compute_face_normals(self.mesh, faces)
         shear_rad = math.radians(self.render_cfg.shear_mag)
@@ -155,7 +163,7 @@ class Sensing(Stiffness):
         BATCH_SIZE = self.sensing_cfg.batch_size
         start_idx = 0
 
-        print((f"[INFO] Rendering {total_poses} poses with batch_size={BATCH_SIZE}"))
+        print((f" [INFO] Rendering {total_poses} poses with batch_size={BATCH_SIZE}"))
         while start_idx < total_poses:
             end_idx = min(start_idx + BATCH_SIZE, total_poses)
             batch_poses = poses[start_idx:end_idx]
@@ -170,27 +178,27 @@ class Sensing(Stiffness):
 
             start_idx = end_idx
 
-        print(f"[DONE] Coverage scan done, total poses={total_poses}")
+        print(f" [DONE] Coverage scan done, total poses={total_poses}")
 
     def save_results(self, poses):
         points = poses[:,:3, 3]
-        print("[INFO] Saving final results...")
+        print(" [INFO] Saving final results...")
         save_heightmaps(self.all_hm, self.heightmap_dir)
         save_contactmasks(self.all_cm, self.mask_dir)
         save_images(self.all_img, self.image_dir)
-        np.save(os.path.join(self.base, "sampled_points.npy"), points)
-        np.save(os.path.join(self.base, "sensor_poses.npy"), poses)
-        print(f"[DONE] Results in {self.base}")
+        np.save(self.points_path, points)
+        np.save(self.poses_path, poses)
+        print(f" [DONE] Results in {self.base}")
 
     def show_heatmap(self, poses, mode=None, visible=False):
-        print(f"[INFO] Stiffness map creating...")
+        print(f" [INFO] Stiffness map creating...")
         points = poses[:,:3, 3]
         if mode=="origin":
             org_k = self.get_local_stiffness(points, self.mesh_bounds)
             norm_k = self.k_normalize(org_k)
         else:
             k_l = []
-            for i in range(self.max_samples):
+            for i in range(self.samples):
                 hm_path = osp.join(self.heightmap_dir, f"{i}.jpg")
                 hm = Image.open(hm_path)
                 hm_img = TRANSFORM(hm.convert('L'))

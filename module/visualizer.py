@@ -52,10 +52,12 @@ class Viz:
         self.zoom = zoom
 
         self.viz_queue = queue.Queue(1)
-        self.plotter.add_callback(self.update_viz, interval=500)
+        self.plotter.add_callback(self.update_viz, interval=1)
         self.pause = False
         self.font_size = int(30 * window_size)
         self.off_screen = off_screen
+
+
 
     def toggle_vis(self, flag):
         self.mesh_actor.SetVisibility(flag)
@@ -91,7 +93,7 @@ class Viz:
         self,
         obj_model: str,
         mesh_path: str,
-        frame_rate: int = 30,
+        frame_rate: int = 1,
     ):
         self.mesh_pv = pv.read(mesh_path)  # pyvista object
         self.mesh_pv_deci = pv.read(
@@ -160,7 +162,7 @@ class Viz:
             #     position=(15 + widget_size, pos - 2 * (widget_size + offset)),
             #     color="black",
             #     font="times",
-            #     font_size=self.font_size,
+            #     font_size=self.font_size
             # )
         self.set_camera()
 
@@ -254,6 +256,7 @@ class Viz:
             ) = self.viz_queue.get()
             self.viz_contact(sampled_points,frame)
             self.viz_tactile_image(tactile_images,heightmaps,contact_masks)
+
             # self.mirror_view()
             self.plotter.add_text(
                 f"\nFrame {frame}   ",
@@ -316,8 +319,10 @@ class Viz:
     def viz_tactile_image(
         self,
         image: np.ndarray,
-        heightmap: torch.Tensor,
-        mask: torch.Tensor,
+        heightmap: np.ndarray,
+        mask: np.ndarray,
+        # heightmap: torch.Tensor,
+        # mask: torch.Tensor,
         s: float = 1.8e-3 ,
     ) -> None:
         if self.image_plane is None:
@@ -379,10 +384,10 @@ class Viz:
         # )
         self.plotter.subplot(0, 1)
 
-        heightmap, mask = heightmap.cpu().numpy(), mask.cpu().numpy()
+        heightmap, mask = heightmap, mask
         image_tex = pv.numpy_to_texture(image)
 
-        heightmap_tex = pv.numpy_to_texture(-heightmap * mask.astype(np.float32))
+        heightmap_tex = pv.numpy_to_texture(-heightmap * mask.astype(np.uint8))
         self.heightmap_plane.points[:, -1] = (
             np.flip(heightmap * mask.astype(np.float32), axis=0).ravel() * (0.5 * s)
             - 0.15

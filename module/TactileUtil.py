@@ -75,13 +75,14 @@ class Stiffness:
 
 
 class TactileMap(Stiffness):
-    def __init__(self, obj, config):
+    def __init__(self, config):
         super().__init__(config)
-        self.obj = obj
+        self.obj = config.obj_model
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.cfg = config
         self.num_samples = config.sensing.num_samples
         self._init_paths()
+        self._init_poses()
         self.model = TSN_COPY(num_k = self.k_num)
 
 
@@ -97,29 +98,29 @@ class TactileMap(Stiffness):
         self.mask_dir = osp.join(base, "gt_contactmasks")
         self.stl_filename = osp.join(stl, f"{self.num_samples}_re_mesh.stl")
 
-
-    @cached_property
-    def points_np(self):
-        return np.load(self.points_path)
-
-    @cached_property
-    def points(self):
-        return torch.tensor(self.points_np, device=self.device)
-
-    @cached_property
-    def total_frames(self):
-        return len(self.points)
-
-    @cached_property
-    def poses(self):
+    def _init_poses(self):
         if os.path.exists(self.sensor_poses_path):
-            return np.load(self.sensor_poses_path)
-        return None
+            self.poses = np.load(self.sensor_poses_path)
+            self.total_frames=self.poses.shape[0]
+
+
+    @property
+    def points(self):
+        points_np = self.poses[:,:3, 3]
+        return torch.tensor(points_np, device=self.device)
+
+    # @cached_property
+    # def points_np(self):
+    #     return np.load(self.points_path)
+    #
+    # @cached_property
+    # def points(self):
+    #     return torch.tensor(self.points_np, device=self.device)
+
+
 
     @cached_property
     def transform(self):
-        # 만약 TRANSFORM을 사용한다면 그대로 사용하고,
-        # 아니라면 필요한 transform을 정의하세요.
         return TRANSFORM
 
     @cached_property
@@ -209,7 +210,6 @@ class TactileMap(Stiffness):
             -depth_center
         ], device=self.device, dtype=local_points.dtype)
         local_points_centered = local_points - center_point
-
         # Global transformation (sensor pose 적용)
         if self.poses is not None:
             pose = self.poses[idx]  # 4x4 matrix (NumPy)
@@ -228,19 +228,38 @@ class TactileMap(Stiffness):
 
         return global_points, predicted_k
 
+    def process_all_frame(self):
+        all_gp = []
+        pred_k = []
+        for frame in range(self.total_frames):
+            gp, k_hat= self.process_frame(frame)
+            all_gp.append(gp)
+            pred_k.append(k_hat.item())
+        all_gp_tensor = merge_points(all_gp)
+        return all_gp_tensor, pred_k
 
-    def pcd2mesh(self, all_points, alpha):
-        p = merge_points(all_points)
-        if p is None:
-            print("[ERROR] No frames were processed.")
-            return
-        pcd = prepare_point_cloud(all_points=p,cfg=self.cfg)
+    def process_part_frame(self, indices):
+        all_gp = []
+        pred_k = []
+        for idx in indices:
+            gp, k_hat= self.process_frame(idx)
+            all_gp.append(gp)
+            pred_k.append(k_hat.item())
+        all_gp_tensor = merge_points(all_gp)
+        return all_gp_tensor, pred_k
+
+    def pcd2mesh(self, all_points_tensor, alpha,down_sample=None):
+        # p = merge_points(all_points)
+        # if p is None:
+        #     print("[ERROR] No frames were processed.")
+        #     return
+        pcd = self.prepare_point_cloud(all_points=all_points_tensor,cfg=self.cfg, down_sample=down_sample)
         mesh = reconstruct_mesh_from_pcd(pcd, alpha)
         return mesh
 
     def stl_export(self, mesh, visible=False):
         o3d.io.write_triangle_mesh(self.stl_filename, mesh)
-        print(f"[INFO] Mesh has been saved to {self.stl_filename}.")
+        print(f" [INFO] Mesh has been saved to {self.stl_filename}.")
 
         if visible:
             o3d.visualization.draw_geometries([mesh], window_name="3D Reconstruction Mesh",width=900, height=600)
@@ -254,6 +273,28 @@ class TactileMap(Stiffness):
         if visible:
             colored_mesh.show()
 
+    def prepare_point_cloud(self, all_points,down_sample=None):
+
+        max_points = self.cfg.get("max_points", 80_000_000)
+        if all_points.shape[0] > max_points:
+            indices = torch.randperm(all_points.shape[0])[:max_points]
+            all_points = all_points[indices]
+        # print(f" [INFO] Total points after filtering: {all_points.shape[0]}")
+        all_points_np = all_points.cpu().numpy()
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(all_points_np)
+        if down_sample is not None:
+            return pcd
+        voxel_size = self.cfg.get("voxel_size", 0.0003)
+        # voxel_size = cfg.get("voxel_size", 0.0002)
+        pcd = pcd.voxel_down_sample(voxel_size)
+        nb_neighbors = self.cfg.get("nb_neighbors", 20)
+        std_ratio = self.cfg.get("std_ratio", 2.0)
+        pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+        print(f" [INFO] Number of points after downsampling and outlier removal: {len(pcd.points)}")
+        return pcd
+
 def merge_points(all_points_list):
     """
     여러 프레임에서 얻은 global point들을 병합 및 필터링.
@@ -265,27 +306,10 @@ def merge_points(all_points_list):
     return all_points
 
 
-def prepare_point_cloud(all_points, cfg):
 
-    max_points = cfg.get("max_points", 80_000_000)
-    if all_points.shape[0] > max_points:
-        indices = torch.randperm(all_points.shape[0])[:max_points]
-        all_points = all_points[indices]
-    # print(f"[INFO] Total points after filtering: {all_points.shape[0]}")
-    all_points_np = all_points.cpu().numpy()
-
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(all_points_np)
-    voxel_size = cfg.get("voxel_size", 0.00025)
-    pcd = pcd.voxel_down_sample(voxel_size)
-    nb_neighbors = cfg.get("nb_neighbors", 20)
-    std_ratio = cfg.get("std_ratio", 2.0)
-    pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
-    print(f"[INFO] Number of points after downsampling and outlier removal: {len(pcd.points)}")
-    return pcd
 
 def reconstruct_mesh_from_pcd(pcd, alpha):
-    print(f"[INFO] Performing Alpha Shape Reconstruction (alpha={alpha})...")
+    print(f" [INFO] Performing Alpha Shape Reconstruction (alpha={alpha})...")
 
     try:
         mesh_rec = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, alpha)
@@ -302,3 +326,28 @@ def reconstruct_mesh_from_pcd(pcd, alpha):
     mesh_rec.remove_degenerate_triangles()
     mesh_rec.compute_vertex_normals()
     return mesh_rec
+
+
+def load_all_heightmaps(heightmap_dir, img_extension="jpg", height=320, width=240):
+    # Get a sorted list of image file paths
+    file_list = sorted([
+        os.path.join(heightmap_dir, f)
+        for f in os.listdir(heightmap_dir)
+        if f.lower().endswith(img_extension)
+    ])
+
+    # Load each image, resize if needed, and convert to a numpy array
+    images = []
+    for file_path in file_list:
+        img = Image.open(file_path).convert('L')  # convert to grayscale if necessary
+        img = img.resize((width, height))  # ensure the size is (width, height)
+        img_np = np.array(img)
+        images.append(img_np)
+
+    # Stack all images into a single numpy array of shape (N, height, width)
+    all_images_np = np.stack(images, axis=0)
+
+    # Convert the numpy array to a torch tensor
+    heightmaps_tensor = torch.tensor(all_images_np, dtype=torch.float).unsqueeze(1)
+
+    return heightmaps_tensor
