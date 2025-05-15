@@ -1,0 +1,29 @@
+model:
+  latent_dim: 128
+  num_input_channels: 1
+  num_output_channels: 1
+  drop_p: 0.3
+
+  output_size: [32,32]
+  backbone : ResNet20
+  saved_path: "model_weights/32_32_${feat_extractor.model.backbone}_1.pth"
+  pretrained: True
+
+
+train:
+  num_epochs: 1000
+  lr : 0.001
+  use_scheduler: True
+  gamma: 0.99
+  early_stop: True
+  early_stop_patience: 50
+  early_stop_min_delta: 1e-5
+  infer_dir: data/model_infer/FE_infer
+
+
+
+
+
+
+
+

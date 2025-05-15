@@ -1,0 +1,26 @@
+model:
+  in_dim: 16
+  latent_dim: 8
+  num_layers: 3
+  drop_ratio: 0.3
+  norm_type: layer
+  mask_ratio: 0.3
+  gnn_type: gat
+  saved_path: model_weights/GraphMAE5.pth
+  ##
+  hidden_dim: [16,16]
+  JK: last
+
+
+train:
+  epochs: 10000
+  loss_fn: CE
+  lr : 0.001
+  use_scheduler: True
+
+
+
+
+
+
+

@@ -1,107 +1,63 @@
 import numpy as np
 import torch
+from torch.utils.data import TensorDataset
 from PIL import Image
 import open3d as o3d
 from os import path as osp
-from module.TSN import TRANSFORM, TSN_COPY
+from module.model import build_model, build_classifier_model
+from module.Stiffness import Stiffness
 from midastouch.render.digit_renderer import digit_renderer
 from functools import cached_property
 
 import os
 import trimesh
-from scipy.spatial import cKDTree
-import matplotlib.pyplot as plt
+
+import pyvista as pv
+
+import pymeshlab as ml
 
 
-class Stiffness:
-    def __init__(self, stiff_config):
-        self.k_cfg = stiff_config.render.k
-
-    @cached_property
-    def k_values(self):
-        k_min, k_max, k_interval= self.k_cfg.min, self.k_cfg.max, self.k_cfg.interval
-        return np.array(list(range(k_min, k_max + 1, k_interval)))
-    @cached_property
-    def k_num(self):
-        return self.k_values.shape[0]
-
-    def k_normalize(self,k):
-        return (k - self.k_values.min()) / (self.k_values.max() - self.k_values.min() + 1e-8)
-
-
-    def get_local_stiffness(self,positions, bounds):
-        min_bound, max_bound = bounds
-        min_bound = np.array(min_bound)
-        max_bound = np.array(max_bound)
-
-        # 각 축의 구간 길이 계산
-        z_interval = (max_bound[2] - min_bound[2]) / 2.0
-        x_interval = (max_bound[0] - min_bound[0]) / 2.0
-        y_interval = (max_bound[1] - min_bound[1]) / 2.0
-
-        # 각 contact point의 인덱스 계산 (배치 연산)
-        z_idx = np.floor((positions[:, 2] - min_bound[2]) / z_interval).astype(np.int32)
-        z_idx = np.clip(z_idx, 0, 1)
-
-        x_idx = np.floor((positions[:, 0] - min_bound[0]) / x_interval).astype(np.int32)
-        x_idx = np.clip(x_idx, 0, 1)
-
-        y_idx = np.floor((positions[:, 1] - min_bound[1]) / y_interval).astype(np.int32)
-        y_idx = np.clip(y_idx, 0, 1)
-
-        xy_idx = y_idx * 2 + x_idx
-        region_idx = (z_idx * 4 + xy_idx) % 8  # 0 ~ 15
-
-        stiffness_candidates = self.k_values
-        return stiffness_candidates[region_idx]
-
-    def color_mesh_by_stiffness(self, mesh, sample_positions, sample_stiffness, colormap_name='viridis'):
-        # KD-tree를 구축하여 각 버텍스에 대해 가장 가까운 contact point 찾기
-        tree = cKDTree(sample_positions)
-        vertex_positions = mesh.vertices  # (M, 3)
-        distances, indices = tree.query(vertex_positions)
-
-        # 각 버텍스에 대해 stiffness 값 할당
-        vertex_stiffness = sample_stiffness[indices]
-
-
-        # colormap 적용 (RGBA -> RGB 추출)
-        cmap = plt.get_cmap(colormap_name)
-        vertex_colors = cmap(vertex_stiffness)[:, :3]  # (M, 3), 값은 0~1
-
-        # trimesh에서는 vertex_colors가 0~255 uint8 형식이어야 함
-        mesh.visual.vertex_colors = (vertex_colors * 255).astype(np.uint8)
-        return mesh
 
 
 class TactileMap(Stiffness):
-    def __init__(self, config):
+    def __init__(self, config, stl_filename=None):
         super().__init__(config)
         self.obj = config.obj_model
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.cfg = config
         self.num_samples = config.sensing.num_samples
+        self.base = config.data_dir
+        self.stl_filename = stl_filename
+        self.scheme = config.sim.scheme
         self._init_paths()
         self._init_poses()
-        self.model = TSN_COPY(num_k = self.k_num)
+        self._init_classifier()
 
 
     def _init_paths(self):
-        base = osp.join("data", "sim", self.obj, "full_coverage")
-        stl = osp.join(base, "recon_stl")
-        os.makedirs(stl, exist_ok=True)
+        base = self.base
         self.data_path = base
-        self.stl_path = stl
         self.points_path = osp.join(base, "sampled_points.npy")
         self.sensor_poses_path = osp.join(base, "sensor_poses.npy")
         self.heightmap_dir = osp.join(base, "gt_heightmaps")
         self.mask_dir = osp.join(base, "gt_contactmasks")
-        self.stl_filename = osp.join(stl, f"{self.num_samples}_re_mesh.stl")
 
     def _init_poses(self):
         if os.path.exists(self.sensor_poses_path):
             self.poses = np.load(self.sensor_poses_path)
             self.total_frames=self.poses.shape[0]
+
+    def _init_classifier(self):
+        _fe_model_cfg = self.cfg.feat_extractor.model
+        _cls_model_cfg = self.cfg.k_classifier.model
+        _model, _ = build_model(_fe_model_cfg)
+        _encoder = _model.get_encoder()
+
+        self.classifier,_ = build_classifier_model(_encoder, _cls_model_cfg)
+        self.classifier.load_state_dict(torch.load(_cls_model_cfg.saved_path))
+        self.classifier.eval()
+        print(f" [INFO] Classifier model loaded from {_cls_model_cfg.saved_path}")
+
 
 
     @property
@@ -119,9 +75,9 @@ class TactileMap(Stiffness):
 
 
 
-    @cached_property
-    def transform(self):
-        return TRANSFORM
+    # @cached_property
+    # def transform(self):
+    #     return TRANSFORM
 
     @cached_property
     def renderer(self):
@@ -170,23 +126,19 @@ class TactileMap(Stiffness):
           - local point cloud 생성 및 센서 좌표계 -> global 좌표 변환
         반환: global point cloud (tensor)
         """
-        hm_path = osp.join(self.heightmap_dir, f"{idx}.jpg")
-        mask_path = osp.join(self.mask_dir, f"{idx}.jpg")
+        hm_path = osp.join(self.heightmap_dir, f"{idx:04d}.jpg")
+        mask_path = osp.join(self.mask_dir, f"{idx:04d}.jpg")
         try:
             hm = Image.open(hm_path)
             cm = Image.open(mask_path)
-            heightmap_np = np.array(hm)
-            mask_np = np.array(cm).astype(np.uint8)
+            # heightmap_np = np.array(transforms.Resize((320,240),interpolation=transforms.InterpolationMode.BICUBIC)(hm))
+            # mask_np = np.array(transforms.Resize((320,240),interpolation=transforms.InterpolationMode.BICUBIC)(cm)).astype(np.uint8)
+            heightmap_np = np.array(hm.resize((240,320),resample=Image.Resampling.BICUBIC))
+            mask_np = np.array(cm.resize((240,320),resample=Image.Resampling.BICUBIC)).astype(np.uint8)
+
         except Exception as e:
             print(f"[ERROR] Failed to load images for frame {idx}: {e}")
             return None
-
-        # 모델 추론 (stiffness 예측)
-        hm_img = TRANSFORM(hm.convert('L'))
-        with torch.no_grad():
-            output = self.model(hm_img.unsqueeze(0).to(self.device))
-            _, predicted_k = torch.max(output, 1)
-        # (predicted_k 값은 필요 시 저장)
 
         # Tensor 변환
         heightmap = torch.tensor(heightmap_np, device=self.device)
@@ -226,52 +178,78 @@ class TactileMap(Stiffness):
             contact_pt = torch.tensor(self.points[idx], device=self.device, dtype=local_points.dtype)
             global_points = local_points_centered + contact_pt
 
-        return global_points, predicted_k
+        return global_points
 
     def process_all_frame(self):
         all_gp = []
-        pred_k = []
         for frame in range(self.total_frames):
-            gp, k_hat= self.process_frame(frame)
+            gp = self.process_frame(frame)
             all_gp.append(gp)
-            pred_k.append(k_hat.item())
         all_gp_tensor = merge_points(all_gp)
-        return all_gp_tensor, pred_k
+
+        return all_gp_tensor
 
     def process_part_frame(self, indices):
         all_gp = []
-        pred_k = []
         for idx in indices:
-            gp, k_hat= self.process_frame(idx)
+            gp = self.process_frame(idx)
             all_gp.append(gp)
-            pred_k.append(k_hat.item())
         all_gp_tensor = merge_points(all_gp)
-        return all_gp_tensor, pred_k
 
-    def pcd2mesh(self, all_points_tensor, alpha,down_sample=None):
+        return all_gp_tensor
+
+
+    def pcd2mesh(self, all_points_tensor,  depth, down_sample=None):
         # p = merge_points(all_points)
         # if p is None:
         #     print("[ERROR] No frames were processed.")
         #     return
-        pcd = self.prepare_point_cloud(all_points=all_points_tensor,cfg=self.cfg, down_sample=down_sample)
-        mesh = reconstruct_mesh_from_pcd(pcd, alpha)
+        pcd = self.prepare_point_cloud(all_points=all_points_tensor, down_sample=down_sample)
+
+        print(f" [INFO] Mesh reconstruction started. This may take a while...")
+        mesh = poisson_pcd_to_mesh(pcd, depth=depth)
+        print(f" [INFO] Mesh reconstruction finished.")
+
+        # if all_ks is not None:
+        #     norm_res = self.k_normalize(all_ks)
+        #     sampled_points = self.points[self.sampled_indices].cpu().numpy()
+
+            # colored_mesh = self.show_colored_with_pyvista(mesh, sampled_points , norm_res)
         return mesh
 
+    def stiffness_tuple(self,ks_tensor):
+        sampled_points = self.points[self.sampled_indices].cpu()
+        pred_k_indices =  ks_tensor[self.sampled_indices].cpu()
+        sampled_pred_k = np.asarray([self.k_values[i] for i in pred_k_indices])
+
+        pred_k_tuple = (sampled_points, sampled_pred_k)
+
+        return pred_k_tuple
+
+
     def stl_export(self, mesh, visible=False):
-        o3d.io.write_triangle_mesh(self.stl_filename, mesh)
+        # o3d.io.write_triangle_mesh(self.stl_filename, mesh)
+        mesh.export(self.stl_filename)
         print(f" [INFO] Mesh has been saved to {self.stl_filename}.")
 
         if visible:
-            o3d.visualization.draw_geometries([mesh], window_name="3D Reconstruction Mesh",width=900, height=600)
+            # o3d.visualization.draw_geometries([mesh], window_name="3D Reconstruction Mesh",width=900, height=600)
+            dargs = dict(
+                color="grey",
+                ambient=0.5,
+                opacity=1,
+                smooth_shading=True,
 
-    def stiff_map(self,pred_k,visible=False):
-        k_list = self.k_values[pred_k]
-        norm_res = (k_list - self.k_values.min()) / (self.k_values.max() - self.k_values.min() + 1e-8)
-        rec_shape = trimesh.load_mesh(self.stl_filename)
-        colored_mesh = self.color_mesh_by_stiffness(rec_shape, self.points[self.sampled_indices].cpu().numpy(), norm_res,
-                                               colormap_name='viridis')
-        if visible:
-            colored_mesh.show()
+                specular=1.0,
+                show_scalar_bar=False,
+                render=False,
+            )
+
+            plotter = pv.Plotter()
+            plotter.add_mesh(mesh, **dargs)
+            plotter.add_axes()
+            plotter.show(title="STL Model Viewer")
+
 
     def prepare_point_cloud(self, all_points,down_sample=None):
 
@@ -286,14 +264,31 @@ class TactileMap(Stiffness):
         pcd.points = o3d.utility.Vector3dVector(all_points_np)
         if down_sample is not None:
             return pcd
-        voxel_size = self.cfg.get("voxel_size", 0.0003)
+        voxel_size = self.cfg.get("voxel_size", 0.0002)
         # voxel_size = cfg.get("voxel_size", 0.0002)
         pcd = pcd.voxel_down_sample(voxel_size)
-        nb_neighbors = self.cfg.get("nb_neighbors", 20)
+        nb_neighbors = self.cfg.get("nb_neighbors", 10)
         std_ratio = self.cfg.get("std_ratio", 2.0)
         pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+
         print(f" [INFO] Number of points after downsampling and outlier removal: {len(pcd.points)}")
+
+        # 중요! 메쉬 생성 전 법선(normal) 계산 필요
+        pcd.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.001, max_nn=30)
+        )
+
+        # 법선 방향을 메쉬에 적합하도록 정렬
+        pcd.orient_normals_consistent_tangent_plane(100)
+
         return pcd
+
+    def show_stiffness_map(self, all_ks, visible=False):
+        if visible:
+            norm_res = self.k_normalize(all_ks)
+            rec_mesh = trimesh.load_mesh(self.stl_filename)
+            colored_mesh = self.show_colored_with_pyvista(rec_mesh,)
+
 
 def merge_points(all_points_list):
     """
@@ -307,47 +302,21 @@ def merge_points(all_points_list):
 
 
 
+def poisson_pcd_to_mesh(pcd, depth=9):
+    ms = ml.MeshSet()
+    ms.add_mesh(ml.Mesh(vertex_matrix=np.asarray(pcd.points),
+                        v_normals_matrix=np.asarray(pcd.normals)))
 
-def reconstruct_mesh_from_pcd(pcd, alpha):
-    print(f" [INFO] Performing Alpha Shape Reconstruction (alpha={alpha})...")
+    ms.generate_surface_reconstruction_screened_poisson(depth=depth, fulldepth=6, cgdepth=3)
 
-    try:
-        mesh_rec = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, alpha)
-        if len(mesh_rec.vertices) == 0:
-            print("[WARN] The reconstructed mesh is empty. Increasing alpha value and retrying.")
-            alpha *= 2
-            mesh_rec = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, alpha)
-    except Exception as e:
-        print(f"[ERROR] Alpha Shape Reconstruction failed: {e}")
-        return None
-    if len(mesh_rec.vertices) == 0:
-        print("[ERROR] The reconstructed mesh is still empty. Please adjust the alpha parameter.")
-        return None
-    mesh_rec.remove_degenerate_triangles()
-    mesh_rec.compute_vertex_normals()
-    return mesh_rec
+    mesh_pl = ms.current_mesh()
+
+    # PyMeshLab mesh에서 vertices와 faces 배열을 추출
+    vertices = mesh_pl.vertex_matrix()  # numpy array, shape (N, 3)
+    faces = mesh_pl.face_matrix()  # numpy array, shape (M, 3)
+
+    # trimesh 객체로 변환
+    mesh_tm = trimesh.Trimesh(vertices=vertices, faces=faces)
+    return mesh_tm
 
 
-def load_all_heightmaps(heightmap_dir, img_extension="jpg", height=320, width=240):
-    # Get a sorted list of image file paths
-    file_list = sorted([
-        os.path.join(heightmap_dir, f)
-        for f in os.listdir(heightmap_dir)
-        if f.lower().endswith(img_extension)
-    ])
-
-    # Load each image, resize if needed, and convert to a numpy array
-    images = []
-    for file_path in file_list:
-        img = Image.open(file_path).convert('L')  # convert to grayscale if necessary
-        img = img.resize((width, height))  # ensure the size is (width, height)
-        img_np = np.array(img)
-        images.append(img_np)
-
-    # Stack all images into a single numpy array of shape (N, height, width)
-    all_images_np = np.stack(images, axis=0)
-
-    # Convert the numpy array to a torch tensor
-    heightmaps_tensor = torch.tensor(all_images_np, dtype=torch.float).unsqueeze(1)
-
-    return heightmaps_tensor

@@ -1,0 +1,21 @@
+train:
+  dir : data/train
+  obj: ["002_master_chef_can","005_tomato_soup_can","011_banana","015_peach","029_plate", "035_power_drill", "055_baseball"]
+
+test:
+  dir: data/test
+  obj: ["004_sugar_box","024_bowl", "048_hammer"]
+
+
+image:
+  flag: CL
+#  flag: AE
+  file_name : image_datasets
+  batch_size: 128
+
+
+graph:
+  file_name: graph_datasets
+  k: 5
+  num_neighbors: [ 10,5, 5 ]
+  batch_size: 4

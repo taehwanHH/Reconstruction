@@ -1,0 +1,17 @@
+model:
+  emb_dim: 128
+  n_classes: 4
+  drop_p: 0.3
+
+  saved_path: "model_weights/classifier_${feat_extractor.model.backbone}_3_3.pth"
+  pretrained: True
+
+train:
+  num_epochs: 200
+  lr: 0.005
+  use_scheduler: True
+  gamma: 0.99
+  early_stop: True
+  early_stop_patience: 70
+  early_stop_min_delta: 1e-4
+  infer_dir: data/model_infer/k_Cl

@@ -1,0 +1,31 @@
+model:
+  in_dim: 128
+  num_hidden: 256
+  num_layers: 2
+  num_dec_layers: 2
+  num_remasking: 4
+  nhead: 4
+  nhead_out: 1
+  activation: "prelu"
+  feat_drop: 0.2
+  negative_slope: 0.1
+  residual: False
+  norm : "layernorm"
+  mask_ratio: 0.3
+  remask_ratio: 0.3
+  encoder_type: "gat"
+  decoder_type: "gat"
+  loss_fn: "sce"
+  alpha_l: 2
+  lam: 1
+  saved_path: model_weights/GraphMAE6.pth
+  pretrained: True
+
+
+train:
+  epochs: 2000
+  lr: 0.01
+  weight_decay: 0.04
+  use_scheduler : True
+  early_stop_patience: 100
+  early_stop_min_delta: 1e-5

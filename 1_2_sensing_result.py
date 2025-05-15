@@ -1,15 +1,12 @@
-import os
 from os import path as osp
 import threading
 import numpy as np
-from module.visualizer import Viz
+from module.result.visualizer import Viz
 
 from omegaconf import DictConfig
 from midastouch.modules.misc import (
-    load_images, save_heightmaps, save_contactmasks, save_images, images_to_video, remove_and_mkdir
+    load_images, images_to_video, remove_and_mkdir
 )
-from midastouch.contrib.tdn_fcrn.tdn import TDN
-from midastouch.render.digit_renderer import digit_renderer
 
 import hydra
 import time
